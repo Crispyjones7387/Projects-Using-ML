@@ -1,0 +1,31 @@
+#import an image and using features detect text 
+import base64
+IMAGE="gs://cloud-training-demos/vision/sign2.jpg"
+vservice = build('vision', 'v1', developerKey=APIKEY)
+request = vservice.images().annotate(body={
+        'requests': [{
+                'image': {
+                    'source': {
+                        'gcs_image_uri': IMAGE
+                    }
+                },
+                'features': [{
+                    'type': 'TEXT_DETECTION',
+                    'maxResults': 3,
+                }]
+            }],
+        })
+responses = request.execute(num_retries=3)
+print(responses)
+
+#atomatically detect which language and print it on the screen 
+foreigntext = responses['responses'][0]['textAnnotations'][0]['description']
+foreignlang = responses['responses'][0]['textAnnotations'][0]['locale']
+print(foreignlang, foreigntext)
+
+#now print the above language to english 
+inputs=[foreigntext]
+outputs = service.translations().list(source=foreignlang, target='en', q=inputs).execute()
+# print(outputs)
+for input, output in zip(inputs, outputs['translations']):
+  print("{0} -> {1}".format(input, output['translatedText']))
