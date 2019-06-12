@@ -1,0 +1,19 @@
+#feed in sample auido clip
+sservice = build('speech', 'v1', developerKey=APIKEY)
+response = sservice.speech().recognize(
+    body={
+        'config': {
+            'languageCode' : 'en-US',
+            'encoding': 'LINEAR16',
+            'sampleRateHertz': 16000
+        },
+        'audio': {
+            'uri': 'gs://cloud-training-demos/vision/audio.raw'
+            }
+        }).execute()
+print(response)
+
+print(response['results'][0]['alternatives'][0]['transcript'])
+print('Confidence=%f' % response['results'][0]['alternatives'][0]['confidence'])
+
+#confidence shows how close it to predicting the correct response
