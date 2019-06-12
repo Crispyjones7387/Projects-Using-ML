@@ -1,0 +1,22 @@
+import tensorflow as tf
+import numpy as np
+def compute_area(sides):
+  # tensors which we slice to feed side of the triangle and building graph
+  a = sides[:,0]  # 5.0, 2.3
+  b = sides[:,1]  # 3.0, 4.1
+  c = sides[:,2]  # 7.1, 4.8
+  
+
+  s = (a + b + c) * 0.5   # (a + b) is a short-cut to tf.add(a, b)
+  areasq = s * (s - a) * (s - b) * (s - c) # (a * b) is a short-cut to tf.multiply(a, b), not tf.matmul(a, b)
+  return tf.sqrt(areasq)
+
+#run the graph 
+with tf.Session() as sess:
+  # pass in two triangles
+  area = compute_area(tf.constant([
+      [5.0, 3.0, 7.1],
+      [2.3, 4.1, 4.8]
+    ]))
+  result = sess.run(area)
+  print(result)
