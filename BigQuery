@@ -1,0 +1,14 @@
+#standardSQL
+SELECT
+  departure_airport,
+  arrival_airport,
+  COUNT(1) AS num_flights
+FROM
+  `bigquery-samples.airline_ontime_data.flights`
+GROUP BY
+  departure_airport,
+  arrival_airport
+ORDER BY
+  num_flights DESC
+LIMIT
+  10
