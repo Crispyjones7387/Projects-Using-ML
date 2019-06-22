@@ -1,0 +1,257 @@
+#create a bucket
+#start datalab 
+#clone files
+
+%bash
+git clone https://github.com/GoogleCloudPlatform/training-data-analyst
+rm -rf training-data-analyst/.git
+
+# Ensure that we have Tensorflow 1.13 installed.
+!pip freeze | grep tensorflow==1.13.1 || pip install tensorflow==1.13.1
+
+#Ensure that we have Apache Beam 2.10 installed.
+!pip freeze | grep apache-beam==2.10.0 || pip install apache-beam[gcp]
+
+import tensorflow as tf
+import apache_beam as beam
+import shutil
+import os
+print(tf.__version__)
+
+PROJECT = "qwiklabs-gcp-cbc8684b07fc2dbd" 
+BUCKET = "qwiklabs-gcp-cbc8684b07fc2dbd-bucket"
+REGION = "asia-south1-b" 
+TFVERSION = "1.13"              
+
+os.environ["PROJECT"] = PROJECT
+os.environ["BUCKET"] = BUCKET
+os.environ["REGION"] = REGION
+os.environ["TFVERSION"] = TFVERSION 
+
+## ensure we"re using python2 env
+os.environ["CLOUDSDK_PYTHON"] = "python2"
+
+%%bash
+gcloud config set project $PROJECT
+gcloud config set compute/region $REGION
+
+## ensure we predict locally with our current Python environment
+gcloud config set ml_engine/local_python `which python`
+
+
+def create_query(phase, sample_size):
+    basequery = """
+    SELECT
+        (tolls_amount + fare_amount) AS fare_amount,
+        EXTRACT(DAYOFWEEK from pickup_datetime) AS dayofweek,
+        EXTRACT(HOUR from pickup_datetime) AS hourofday,
+        pickup_longitude AS pickuplon,
+        pickup_latitude AS pickuplat,
+        dropoff_longitude AS dropofflon,
+        dropoff_latitude AS dropofflat
+    FROM
+        `nyc-tlc.yellow.trips`
+    WHERE
+        trip_distance > 0
+        AND fare_amount >= 2.5
+        AND pickup_longitude > -78
+        AND pickup_longitude < -70
+        AND dropoff_longitude > -78
+        AND dropoff_longitude < -70
+        AND pickup_latitude > 37
+        AND pickup_latitude < 45
+        AND dropoff_latitude > 37
+        AND dropoff_latitude < 45
+        AND passenger_count > 0
+        AND MOD(ABS(FARM_FINGERPRINT(CAST(pickup_datetime AS STRING))), EVERY_N) = 1
+    """
+
+    if phase == 'TRAIN':
+        subsample = """
+        AND MOD(ABS(FARM_FINGERPRINT(CAST(pickup_datetime AS STRING))), EVERY_N * 100) >= (EVERY_N * 0)
+        AND MOD(ABS(FARM_FINGERPRINT(CAST(pickup_datetime AS STRING))), EVERY_N * 100) <  (EVERY_N * 70)
+        """
+    elif phase == 'VALID':
+        subsample = """
+        AND MOD(ABS(FARM_FINGERPRINT(CAST(pickup_datetime AS STRING))), EVERY_N * 100) >= (EVERY_N * 70)
+        AND MOD(ABS(FARM_FINGERPRINT(CAST(pickup_datetime AS STRING))), EVERY_N * 100) <  (EVERY_N * 85)
+        """
+    elif phase == 'TEST':
+        subsample = """
+        AND MOD(ABS(FARM_FINGERPRINT(CAST(pickup_datetime AS STRING))), EVERY_N * 100) >= (EVERY_N * 85)
+        AND MOD(ABS(FARM_FINGERPRINT(CAST(pickup_datetime AS STRING))), EVERY_N * 100) <  (EVERY_N * 100)
+        """
+
+    query = basequery + subsample
+    return query.replace("EVERY_N", sample_size)
+    
+    #write the csv we create to a Cloud Storage bucket
+    
+    %%bash
+if gsutil ls | grep -q gs://${BUCKET}/taxifare/ch4/taxi_preproc/; then
+    gsutil -m rm -rf gs://$BUCKET/taxifare/ch4/taxi_preproc/
+fi
+
+#create a function and pipeline for preprocessing the data. First, we'll define a to_csv function which takes a row dictionary (a dictionary created from a BigQuery reader representing each row of a dataset) and returns a comma separated string for each record
+
+def to_csv(rowdict):
+    """
+    Arguments:
+        -rowdict: Dictionary. The beam bigquery reader returns a PCollection in
+        which each row is represented as a python dictionary
+    Returns:
+        -rowstring: a comma separated string representation of the record
+    """
+    days = ["null", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    CSV_COLUMNS = "fare_amount,dayofweek,hourofday,pickuplon,pickuplat,dropofflon,dropofflat".split(',')
+    rowstring = ','.join([str(rowdict[k]) for k in CSV_COLUMNS])
+    return rowstring
+    
+    #define our primary preprocessing function. Reading through the code this creates a pipeline to read data from BigQuery, use our to_csv function above to make a comma separated string, then write to a file in Google Cloud Storage.
+    
+    import datetime
+
+def preprocess(EVERY_N, RUNNER):
+    """
+    Arguments:
+        -EVERY_N: Integer. Sample one out of every N rows from the full dataset.
+        Larger values will yield smaller sample
+        -RUNNER: "DirectRunner" or "DataflowRunner". Specfy to run the pipeline
+        locally or on Google Cloud respectively. 
+    Side-effects:
+        -Creates and executes dataflow pipeline. 
+        See https://beam.apache.org/documentation/programming-guide/#creating-a-pipeline
+    """
+    job_name = "preprocess-taxifeatures" + "-" + datetime.datetime.now().strftime("%y%m%d-%H%M%S")
+    print("Launching Dataflow job {} ... hang on".format(job_name))
+    OUTPUT_DIR = "gs://{0}/taxifare/ch4/taxi_preproc/".format(BUCKET)
+
+    #dictionary of pipeline options
+    options = {
+        "staging_location": os.path.join(OUTPUT_DIR, "tmp", "staging"),
+        "temp_location": os.path.join(OUTPUT_DIR, "tmp"),
+        "job_name": "preprocess-taxifeatures" + "-" + datetime.datetime.now().strftime("%y%m%d-%H%M%S"),
+        "project": PROJECT,
+        "runner": RUNNER
+    }
+  
+    #instantiate PipelineOptions object using options dictionary
+    opts = beam.pipeline.PipelineOptions(flags = [], **options)
+
+    #instantantiate Pipeline object using PipelineOptions
+    with beam.Pipeline(options=opts) as p:
+        for phase in ["TRAIN", "VALID", "TEST"]:
+            query = create_query(phase, EVERY_N)
+            outfile = os.path.join(OUTPUT_DIR, "{}.csv".format(phase))
+            (
+                p | "read_{}".format(phase) >> beam.io.Read(beam.io.BigQuerySource(query = query, use_standard_sql = True))
+                  | "tocsv_{}".format(phase) >> beam.Map(to_csv)
+                  | "write_{}".format(phase) >> beam.io.Write(beam.io.WriteToText(outfile))
+            )
+    print("Done")
+    
+    #testing our pipeline locally using beam
+    
+    preprocess("50*10000", "DirectRunner")
+    
+    #clear out our bucket to GCS to ensure a fresh run.
+    
+    %%bash
+if gsutil ls -r gs://${BUCKET} | grep -q gs://${BUCKET}/taxifare/ch4/taxi_preproc/; then
+    gsutil -m rm -rf gs://${BUCKET}/taxifare/ch4/taxi_preproc/
+fi
+
+preprocess("50*100", "DataflowRunner")
+
+#list the files
+%%bash
+gsutil ls -l gs://$BUCKET/taxifare/ch4/taxi_preproc/
+%%bash
+gsutil cat "gs://$BUCKET/taxifare/ch4/taxi_preproc/TRAIN.csv-00000-of-*" | head
+
+#develop model with new inputs
+%%bash
+if [ -d sample ]; then
+    rm -rf sample
+fi
+mkdir sample
+gsutil cat "gs://$BUCKET/taxifare/ch4/taxi_preproc/TRAIN.csv-00000-of-*" > sample/train.csv
+gsutil cat "gs://$BUCKET/taxifare/ch4/taxi_preproc/VALID.csv-00000-of-*" > sample/valid.csv
+
+#copy previous model and task
+!cp -r ../03_model_performance/taxifaremodel/* ./taxifaremodel
+
+#look at the files contained within taxifair model
+%%bash
+grep -A 15 "feature_cols =" taxifaremodel/model.py
+
+#adding enineering features
+%%bash
+grep -A 5 "add_engineered_features" taxifaremodel/model.py
+
+#try out the model with a local sample ...testing it out 
+%%bash
+rm -rf taxifare.tar.gz taxi_trained
+export PYTHONPATH=${PYTHONPATH}:${PWD}/taxifare
+python -m taxifaremodel.task \
+    --train_data_path=${PWD}/sample/train.csv \
+    --eval_data_path=${PWD}/sample/valid.csv  \
+    --output_dir=${PWD}/taxi_trained \
+    --train_steps=10 \
+    --job-dir=/tmp
+
+#have a look at the exported files from our training model
+    %%bash
+ls -R taxi_trained/export
+
+%%bash
+model_dir=$(ls ${PWD}/taxi_trained/export/exporter | tail -1)
+saved_model_cli show --dir ${PWD}/taxi_trained/export/exporter/${model_dir} --all
+
+#test out the predictions
+%%writefile /tmp/test.json
+{"dayofweek": 0, "hourofday": 17, "pickuplon": -73.885262, "pickuplat": 40.773008, "dropofflon": -73.987232, "dropofflat": 40.732403}
+
+#see the outcome of the prediction
+%%bash
+model_dir=$(ls ${PWD}/taxi_trained/export/exporter)
+gcloud ml-engine local predict \
+    --model-dir=${PWD}/taxi_trained/export/exporter/${model_dir} \
+    --json-instances=/tmp/test.json
+    
+ #train on the cloud now
+ %%bash
+OUTDIR=gs://${BUCKET}/taxifare/ch4/taxi_trained
+JOBNAME=lab4a_$(date -u +%y%m%d_%H%M%S)
+echo $OUTDIR $REGION $JOBNAME
+gsutil -m rm -rf $OUTDIR
+gcloud ml-engine jobs submit training $JOBNAME \
+    --region=$REGION \
+    --module-name=taxifaremodel.task \
+    --package-path=${PWD}/taxifaremodel \
+    --job-dir=$OUTDIR \
+    --staging-bucket=gs://$BUCKET \
+    --scale-tier=BASIC \
+    --runtime-version=$TFVERSION \
+    -- \
+    --train_data_path="gs://${BUCKET}/taxifare/ch4/taxi_preproc/TRAIN*" \
+    --eval_data_path="gs://${BUCKET}/taxifare/ch4/taxi_preproc/VALID*"  \
+    --train_steps=5000 \
+    --output_dir=$OUTDIR
+  
+#check outcome in the folder
+  %%bash
+gsutil ls gs://${BUCKET}/taxifare/ch4/taxi_trained/export/exporter | tail -1
+
+#examine the exported file
+%%bash
+model_dir=$(gsutil ls gs://${BUCKET}/taxifare/ch4/taxi_trained/export/exporter | tail -1)
+saved_model_cli show --dir ${model_dir} --all
+
+
+#check out the predictions
+%%bash
+model_dir=$(gsutil ls gs://${BUCKET}/taxifare/ch4/taxi_trained/export/exporter | tail -1)
+gcloud ml-engine local predict \
+    --model-dir=${model_dir} \
+    --json-instances=/tmp/test.json
