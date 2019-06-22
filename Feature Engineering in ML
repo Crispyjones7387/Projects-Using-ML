@@ -102,10 +102,10 @@ def to_csv(rowdict):
     Returns:
         -rowstring: a comma separated string representation of the record
     """
-    days = ["null", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    days = ["null", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] #big query has it in form of numbers and we convert that into strings
     CSV_COLUMNS = "fare_amount,dayofweek,hourofday,pickuplon,pickuplat,dropofflon,dropofflat".split(',')
     rowstring = ','.join([str(rowdict[k]) for k in CSV_COLUMNS])
-    return rowstring
+    return rowstring #csv file output
     
     #define our primary preprocessing function. Reading through the code this creates a pipeline to read data from BigQuery, use our to_csv function above to make a comma separated string, then write to a file in Google Cloud Storage.
     
@@ -152,11 +152,11 @@ def preprocess(EVERY_N, RUNNER):
     
     #testing our pipeline locally using beam
     
-    preprocess("50*10000", "DirectRunner")
+    preprocess("50*10000", "DirectRunner") #this takes time .. go to gcp console and check dataflow if it has started or not 
     
     #clear out our bucket to GCS to ensure a fresh run.
     
-    %%bash
+    %%bash #checking if the output train and valid files exist 
 if gsutil ls -r gs://${BUCKET} | grep -q gs://${BUCKET}/taxifare/ch4/taxi_preproc/; then
     gsutil -m rm -rf gs://${BUCKET}/taxifare/ch4/taxi_preproc/
 fi
@@ -174,7 +174,8 @@ gsutil cat "gs://$BUCKET/taxifare/ch4/taxi_preproc/TRAIN.csv-00000-of-*" | head
 if [ -d sample ]; then
     rm -rf sample
 fi
-mkdir sample
+
+mkdir sample #instead of going to cloud again ,create a copy locally 
 gsutil cat "gs://$BUCKET/taxifare/ch4/taxi_preproc/TRAIN.csv-00000-of-*" > sample/train.csv
 gsutil cat "gs://$BUCKET/taxifare/ch4/taxi_preproc/VALID.csv-00000-of-*" > sample/valid.csv
 
@@ -208,7 +209,7 @@ ls -R taxi_trained/export
 model_dir=$(ls ${PWD}/taxi_trained/export/exporter | tail -1)
 saved_model_cli show --dir ${PWD}/taxi_trained/export/exporter/${model_dir} --all
 
-#test out the predictions
+#test out the predictions 
 %%writefile /tmp/test.json
 {"dayofweek": 0, "hourofday": 17, "pickuplon": -73.885262, "pickuplat": 40.773008, "dropofflon": -73.987232, "dropofflat": 40.732403}
 
