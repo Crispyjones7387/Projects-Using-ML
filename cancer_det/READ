@@ -1,0 +1,3 @@
+Download the dataset from https://www.isic-archive.com/#!/topWithHeader/onlyHeaderTop/gallery by manually selecting the files from each benign and malignant. 
+Test requires 1000 images: 500 Malignant & 500 Benign  
+Validation requires 400 images: 200 Malignant & 200 Benign  
